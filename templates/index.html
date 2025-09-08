@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Confluence to Azure DevOps Wiki Migration Tool</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #0078d4;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .button-group {
+            margin: 20px 0;
+            text-align: center;
+        }
+        button {
+            padding: 12px 24px;
+            margin: 0 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .btn-primary {
+            background-color: #0078d4;
+            color: white;
+        }
+        .btn-secondary {
+            background-color: #6c757d;
+            color: white;
+        }
+        .btn-success {
+            background-color: #28a745;
+            color: white;
+        }
+        button:hover {
+            opacity: 0.9;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .section {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .section h2 {
+            margin-top: 0;
+            color: #333;
+        }
+        #status {
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+            display: none;
+        }
+        .status-success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status-error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status-info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        #progress {
+            display: none;
+            margin-top: 20px;
+        }
+        #logs {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #0078d4;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Confluence to Azure DevOps Wiki Migration Tool</h1>
+        
+        <form id="migrationForm">
+            <div class="section">
+                <h2>Confluence Configuration</h2>
+                <div class="form-group">
+                    <label for="confluence_base_url">Base URL</label>
+                    <input type="text" id="confluence_base_url" name="confluence_base_url" 
+                           placeholder="https://yourcompany.atlassian.net" required>
+                </div>
+                <div class="form-group">
+                    <label for="confluence_username">Username</label>
+                    <input type="text" id="confluence_username" name="confluence_username" 
+                           placeholder="your.email@company.com" required>
+                </div>
+                <div class="form-group">
+                    <label for="confluence_api_token">API Token</label>
+                    <input type="password" id="confluence_api_token" name="confluence_api_token" 
+                           placeholder="Your Confluence API Token" required>
+                </div>
+                <div class="form-group">
+                    <label for="confluence_space_key">Space Key</label>
+                    <input type="text" id="confluence_space_key" name="confluence_space_key" 
+                           placeholder="SPACE" required>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>Azure DevOps Configuration</h2>
+                <div class="form-group">
+                    <label for="azuredevops_organization">Organization</label>
+                    <input type="text" id="azuredevops_organization" name="azuredevops_organization" 
+                           placeholder="yourorganization" required>
+                </div>
+                <div class="form-group">
+                    <label for="azuredevops_project">Project</label>
+                    <input type="text" id="azuredevops_project" name="azuredevops_project" 
+                           placeholder="Your Project Name" required>
+                </div>
+                <div class="form-group">
+                    <label for="azuredevops_wiki_identifier">Wiki Identifier</label>
+                    <input type="text" id="azuredevops_wiki_identifier" name="azuredevops_wiki_identifier" 
+                           placeholder="Your.Wiki.Name" required>
+                </div>
+                <div class="form-group">
+                    <label for="azuredevops_pat">Personal Access Token</label>
+                    <input type="password" id="azuredevops_pat" name="azuredevops_pat" 
+                           placeholder="Your Azure DevOps PAT" required>
+                </div>
+            </div>
+
+            <div class="button-group">
+                <button type="button" id="validateBtn" class="btn-secondary">Validate Connections</button>
+                <button type="button" id="migrateBtn" class="btn-success">Start Migration</button>
+            </div>
+        </form>
+
+        <div id="status"></div>
+
+        <div id="progress">
+            <h3>Migration Progress</h3>
+            <div id="progressStatus"></div>
+            <div id="logs"></div>
+        </div>
+    </div>
+
+    <script>
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = `status-${type}`;
+            statusDiv.textContent = message;
+            statusDiv.style.display = 'block';
+        }
+
+        function getFormData() {
+            const form = document.getElementById('migrationForm');
+            const formData = new FormData(form);
+            const data = {};
+            for (let [key, value] of formData.entries()) {
+                data[key] = value;
+            }
+            return data;
+        }
+
+        function setButtonsEnabled(enabled) {
+            document.getElementById('validateBtn').disabled = !enabled;
+            document.getElementById('migrateBtn').disabled = !enabled;
+        }
+
+        document.getElementById('validateBtn').addEventListener('click', async function() {
+            setButtonsEnabled(false);
+            showStatus('Validating connections...', 'info');
+            
+            try {
+                const response = await fetch('/validate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(getFormData())
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showStatus(result.message, 'success');
+                } else {
+                    showStatus(result.message || result.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Error validating connections: ' + error.message, 'error');
+            } finally {
+                setButtonsEnabled(true);
+            }
+        });
+
+
+        document.getElementById('migrateBtn').addEventListener('click', async function() {
+            if (!confirm('Are you sure you want to start the migration? This will create pages in your Azure DevOps wiki.')) {
+                return;
+            }
+            
+            setButtonsEnabled(false);
+            showStatus('Starting migration...', 'info');
+            document.getElementById('progress').style.display = 'block';
+            
+            try {
+                const formData = getFormData();
+                formData.migration_type = 'hierarchical';
+                
+                const response = await fetch('/migrate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showStatus('Migration started successfully', 'success');
+                    startProgressPolling();
+                } else {
+                    showStatus(result.error, 'error');
+                    setButtonsEnabled(true);
+                }
+            } catch (error) {
+                showStatus('Error starting migration: ' + error.message, 'error');
+                setButtonsEnabled(true);
+            }
+        });
+
+        function startProgressPolling() {
+            const progressStatus = document.getElementById('progressStatus');
+            const logs = document.getElementById('logs');
+            
+            const pollInterval = setInterval(async () => {
+                try {
+                    const response = await fetch('/progress');
+                    const status = await response.json();
+                    
+                    if (status.running) {
+                        progressStatus.innerHTML = '<div class="loading"></div>' + status.message;
+                    } else if (status.completed) {
+                        if (status.success) {
+                            progressStatus.textContent = '✓ Migration completed successfully!';
+                            showStatus('Migration completed successfully!', 'success');
+                        } else {
+                            progressStatus.textContent = '✗ Migration failed';
+                            showStatus('Migration failed. Check logs for details.', 'error');
+                        }
+                        clearInterval(pollInterval);
+                        setButtonsEnabled(true);
+                    }
+                    
+                    logs.textContent = status.logs || '';
+                    logs.scrollTop = logs.scrollHeight;
+                } catch (error) {
+                    console.error('Error polling progress:', error);
+                }
+            }, 2000);
+        }
+    </script>
+</body>
+</html>
