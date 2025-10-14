@@ -9,6 +9,16 @@ import json
 import re
 import os
 from typing import Dict, List
+import base64
+
+from pypac import PACSession, get_pac
+from pypac.parser import PACFile
+
+# Load PAC file from URL or string
+pac = get_pac(url='http://webproxy.francotyp.com:8080/proxy.pac')
+
+# Create a session that uses the PAC file
+session = PACSession(pac)
 
 class MigrationUtilities:
     def __init__(self, confluence_config: Dict, azuredevops_config: Dict):
@@ -17,9 +27,10 @@ class MigrationUtilities:
         
         self.confluence_auth = (confluence_config['username'], confluence_config['api_token'])
         pat_token = azuredevops_config['personal_access_token']
+        combined_pat_token = f"this-is-crazy:{pat_token}"
         # Azure DevOps REST APIs expect Bearer token authentication for PATs
         self.azuredevops_headers = {
-            'Authorization': f'Bearer {pat_token}',
+            'Authorization': f'Basic {base64.b64encode(combined_pat_token.encode('utf-8')).decode("utf-8")}',
             'Content-Type': 'application/json'
         }
 
@@ -92,7 +103,7 @@ class MigrationUtilities:
                 'limit': limit
             }
             
-            response = requests.get(url, auth=self.confluence_auth, params=params)
+            response = session.get(url, auth=self.confluence_auth, params=params)
             response.raise_for_status()
             
             data = response.json()
@@ -109,7 +120,7 @@ class MigrationUtilities:
         url = f"{self.confluence_config['base_url']}/wiki/rest/api/content/{page_id}/child/attachment"
         params = {'expand': 'download'}
         
-        response = requests.get(url, auth=self.confluence_auth, params=params)
+        response = session.get(url, auth=self.confluence_auth, params=params)
         response.raise_for_status()
         
         return response.json()['results']
@@ -120,7 +131,7 @@ class MigrationUtilities:
         
         # Test basic API access
         url = f"https://dev.azure.com/{self.azuredevops_config['organization']}/_apis/projects"
-        response = requests.get(url, headers=self.azuredevops_headers, params={'api-version': '6.0'})
+        response = session.get(url, headers=self.azuredevops_headers, params={'api-version': '6.0'})
         
         if response.status_code != 200:
             print(f"❌ Failed to connect to Azure DevOps: {response.status_code}")
@@ -133,7 +144,7 @@ class MigrationUtilities:
                    f"{self.azuredevops_config['project']}/_apis/wiki/wikis/"
                    f"{self.azuredevops_config['wiki_identifier']}")
         
-        wiki_response = requests.get(wiki_url, headers=self.azuredevops_headers, params={'api-version': '6.0'})
+        wiki_response = session.get(wiki_url, headers=self.azuredevops_headers, params={'api-version': '6.0'})
         
         if wiki_response.status_code != 200:
             print(f"❌ Failed to access wiki: {wiki_response.status_code}")
@@ -149,7 +160,7 @@ class MigrationUtilities:
         
         # Test basic API access
         url = f"{self.confluence_config['base_url']}/wiki/rest/api/space/{space_key}"
-        response = requests.get(url, auth=self.confluence_auth)
+        response = session.get(url, auth=self.confluence_auth) # TODO: requests.get
         
         if response.status_code != 200:
             print(f"❌ Failed to access Confluence space: {response.status_code}")
@@ -227,7 +238,7 @@ class MigrationUtilities:
         url = f"{self.confluence_config['base_url']}/wiki/rest/api/content/{page_id}"
         params = {'expand': 'body.storage,ancestors,children'}
         
-        response = requests.get(url, auth=self.confluence_auth, params=params)
+        response = session.get(url, auth=self.confluence_auth, params=params)
         if response.status_code != 200:
             print(f"❌ Failed to get page content: {response.status_code}")
             return False
@@ -391,7 +402,7 @@ class MigrationUtilities:
             'expand': 'body.storage,ancestors'
         }
         
-        response = requests.get(url, auth=self.confluence_auth, params=params)
+        response = session.get(url, auth=self.confluence_auth, params=params)
         response.raise_for_status()
         
         pages = response.json()['results']
