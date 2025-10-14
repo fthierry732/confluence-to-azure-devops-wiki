@@ -7,12 +7,9 @@ Properly handles Azure DevOps Wiki naming conventions with hyphens instead of sp
 import requests
 import os
 import re
-import json
 import base64
-from urllib.parse import urlparse, urljoin
-from pathlib import Path
 import html2text
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 import time
 
 class ConfluenceToAzureDevOpsHierarchicalMigrator:
@@ -98,7 +95,7 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
                 start += limit
                 
         except requests.exceptions.Timeout:
-            print(f"⏰ Confluence API timeout after 30 seconds")
+            print("⏰ Confluence API timeout after 30 seconds")
             raise Exception("Confluence API timeout")
         except requests.exceptions.RequestException as e:
             print(f"🌐 Confluence API request error: {str(e)}")
@@ -343,6 +340,120 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
         
         return html_content
 
+    def preprocess_confluence_html(self, html_content: str) -> str:
+        """Pre-process Confluence-specific HTML elements before conversion"""
+        try:
+            # Handle Confluence macros and structured content
+            # Info panels and note boxes
+            html_content = re.sub(
+                r'<ac:structured-macro ac:name="info"[^>]*>.*?<ac:rich-text-body>(.*?)</ac:rich-text-body>.*?</ac:structured-macro>',
+                r'<div class="info-panel">\1</div>',
+                html_content,
+                flags=re.DOTALL | re.IGNORECASE
+            )
+            
+            # Warning panels
+            html_content = re.sub(
+                r'<ac:structured-macro ac:name="warning"[^>]*>.*?<ac:rich-text-body>(.*?)</ac:rich-text-body>.*?</ac:structured-macro>',
+                r'<div class="warning-panel">\1</div>',
+                html_content,
+                flags=re.DOTALL | re.IGNORECASE
+            )
+            
+            # Code blocks
+            html_content = re.sub(
+                r'<ac:structured-macro ac:name="code"[^>]*>.*?<ac:parameter ac:name="language">([^<]*)</ac:parameter>.*?<ac:plain-text-body>(.*?)</ac:plain-text-body>.*?</ac:structured-macro>',
+                r'<pre><code class="language-\1">\2</code></pre>',
+                html_content,
+                flags=re.DOTALL | re.IGNORECASE
+            )
+            
+            # Code blocks without language
+            html_content = re.sub(
+                r'<ac:structured-macro ac:name="code"[^>]*>.*?<ac:plain-text-body>(.*?)</ac:plain-text-body>.*?</ac:structured-macro>',
+                r'<pre><code>\1</code></pre>',
+                html_content,
+                flags=re.DOTALL | re.IGNORECASE
+            )
+            
+            # Expand macros (remove macro wrapper, keep content)
+            html_content = re.sub(
+                r'<ac:structured-macro[^>]*>.*?<ac:rich-text-body>(.*?)</ac:rich-text-body>.*?</ac:structured-macro>',
+                r'\1',
+                html_content,
+                flags=re.DOTALL | re.IGNORECASE
+            )
+            
+            # Handle Confluence page links
+            html_content = re.sub(
+                r'<ac:link><ri:page ri:content-title="([^"]*)"[^>]*/></ac:link>',
+                r'[\1]',  # Convert to simple text link
+                html_content,
+                flags=re.IGNORECASE
+            )
+            
+            # Handle Confluence user mentions
+            html_content = re.sub(
+                r'<ac:link><ri:user ri:username="([^"]*)"[^>]*/></ac:link>',
+                r'@\1',
+                html_content,
+                flags=re.IGNORECASE
+            )
+            
+            # Clean up any remaining Confluence-specific tags
+            html_content = re.sub(r'<ac:[^>]*>', '', html_content)
+            html_content = re.sub(r'</ac:[^>]*>', '', html_content)
+            html_content = re.sub(r'<ri:[^>]*/?>', '', html_content)
+            
+            return html_content
+            
+        except Exception as e:
+            print(f"  ⚠️ HTML preprocessing error: {str(e)}")
+            return html_content
+
+    def postprocess_markdown(self, markdown_content: str) -> str:
+        """Post-process markdown for better formatting"""
+        try:
+            # Clean up excessive newlines
+            markdown_content = re.sub(r'\n{3,}', '\n\n', markdown_content)
+            
+            # Fix list formatting
+            markdown_content = re.sub(r'\n(\s*)[-*+]\s+', r'\n\1- ', markdown_content)
+            
+            # Fix numbered lists
+            markdown_content = re.sub(r'\n(\s*)\d+\.\s+', r'\n\11. ', markdown_content)
+            
+            # Clean up info/warning panels
+            markdown_content = re.sub(
+                r'<div class="info-panel">(.*?)</div>',
+                r'> **Info**\n> \1',
+                markdown_content,
+                flags=re.DOTALL
+            )
+            
+            markdown_content = re.sub(
+                r'<div class="warning-panel">(.*?)</div>',
+                r'> **Warning**\n> \1',
+                markdown_content,
+                flags=re.DOTALL
+            )
+            
+            # Clean up any remaining HTML tags
+            markdown_content = re.sub(r'<[^>]+>', '', markdown_content)
+            
+            # Fix code block formatting
+            markdown_content = re.sub(r'```\s*\n\s*```', '```', markdown_content)
+            
+            # Ensure proper spacing around headers
+            markdown_content = re.sub(r'\n(#{1,6}\s)', r'\n\n\1', markdown_content)
+            markdown_content = re.sub(r'(#{1,6}[^\n]*)\n([^#\n])', r'\1\n\n\2', markdown_content)
+            
+            return markdown_content
+            
+        except Exception as e:
+            print(f"  ⚠️ Markdown postprocessing error: {str(e)}")
+            return markdown_content
+
     def check_file_exists_in_azure(self, file_path: str) -> bool:
         """Check if a file already exists in Azure DevOps Git repository"""
         try:
@@ -368,26 +479,36 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
             response = requests.get(items_url, headers=self.azuredevops_headers, params=params, timeout=30)
             return response.status_code == 200
             
-        except Exception as e:
+        except Exception:
             # If we can't check, assume file doesn't exist to be safe
             print(f"  ⚠️ Unable to check if file exists: {file_path}, assuming it doesn't exist")
             return False
 
     def convert_html_to_markdown(self, html_content: str, page_id: str) -> str:
-        """Convert HTML to Markdown with image processing"""
+        """Convert HTML to Markdown with enhanced Confluence-specific processing"""
         try:
             # First process images
             html_content = self.process_confluence_images(html_content, page_id)
             
+            # Pre-process Confluence-specific elements before html2text
+            html_content = self.preprocess_confluence_html(html_content)
+            
+            # Configure html2text for better conversion
             h = html2text.HTML2Text()
             h.ignore_links = False
             h.ignore_images = False
             h.ignore_emphasis = False
             h.body_width = 0
             h.unicode_snob = True
+            h.escape_snob = True  # Escape special characters
+            h.mark_code = True    # Mark code blocks
+            h.wrap_links = False  # Don't wrap links
+            h.wrap_list_items = True  # Wrap list items properly
             
             markdown_content = h.handle(html_content)
-            markdown_content = re.sub(r'\n{3,}', '\n\n', markdown_content)
+            
+            # Post-process the markdown for better formatting
+            markdown_content = self.postprocess_markdown(markdown_content)
             
             return markdown_content.strip()
             
