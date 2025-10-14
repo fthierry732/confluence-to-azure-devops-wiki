@@ -9,7 +9,6 @@ import json
 import re
 import os
 from typing import Dict, List
-import base64
 
 class MigrationUtilities:
     def __init__(self, confluence_config: Dict, azuredevops_config: Dict):
@@ -18,9 +17,9 @@ class MigrationUtilities:
         
         self.confluence_auth = (confluence_config['username'], confluence_config['api_token'])
         pat_token = azuredevops_config['personal_access_token']
-        auth_string = base64.b64encode(f":{pat_token}".encode()).decode()
+        # Azure DevOps REST APIs expect Bearer token authentication for PATs
         self.azuredevops_headers = {
-            'Authorization': f'Basic {auth_string}',
+            'Authorization': f'Bearer {pat_token}',
             'Content-Type': 'application/json'
         }
 
