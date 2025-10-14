@@ -14,6 +14,16 @@ from pathlib import Path
 import html2text
 from typing import Dict, List, Tuple, Optional
 import time
+base64
+
+from pypac import PACSession, get_pac
+from pypac.parser import PACFile
+
+# Load PAC file from URL or string
+pac = get_pac(url='http://webproxy.francotyp.com:8080/proxy.pac')
+
+# Create a session that uses the PAC file
+session = PACSession(pac)
 
 class ConfluenceToAzureDevOpsHierarchicalMigrator:
     def __init__(self, confluence_config: Dict, azuredevops_config: Dict):
@@ -24,9 +34,10 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
         # Setup authentication headers
         self.confluence_auth = (confluence_config['username'], confluence_config['api_token'])
         pat_token = azuredevops_config['personal_access_token']
+        combined_pat_token = f"this-is-crazy:{pat_token}"
         # Azure DevOps REST APIs expect Bearer token authentication for PATs
         self.azuredevops_headers = {
-            'Authorization': f'Bearer {pat_token}',
+            'Authorization': f'Basic {base64.b64encode(combined_pat_token.encode('utf-8')).decode("utf-8")}',
             'Content-Type': 'application/json'
         }
         
@@ -82,7 +93,7 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
                 }
                 
                 print(f"📡 Fetching pages {start}-{start+limit} from Confluence...")
-                response = requests.get(url, auth=self.confluence_auth, params=params, timeout=30)
+                response = session.get(url, auth=self.confluence_auth, params=params, timeout=30)
                 
                 if response.status_code != 200:
                     print(f"❌ Confluence API error: {response.status_code} - {response.text}")
@@ -218,7 +229,7 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
             url = f"{base_url}/wiki/rest/api/content/{page_id}/child/attachment"
             params = {'expand': 'download'}
             
-            response = requests.get(url, auth=self.confluence_auth, params=params, timeout=30)
+            response = session.get(url, auth=self.confluence_auth, params=params, timeout=30)
             response.raise_for_status()
             
             return response.json()['results']
@@ -250,7 +261,7 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
             # Try downloading
             for attempt in range(2):
                 try:
-                    response = requests.get(download_url, auth=self.confluence_auth, timeout=15)
+                    response = session.get(download_url, auth=self.confluence_auth, timeout=15)
                     response.raise_for_status()
                     
                     with open(local_path, 'wb') as f:
@@ -350,7 +361,7 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
             refs_url = f"https://dev.azure.com/{self.azuredevops_config['organization']}/{self.azuredevops_config['project']}/_apis/git/repositories/{self.azuredevops_config['wiki_identifier']}/refs"
             params = {'filter': 'heads/wikiMaster', 'api-version': '6.0'}
             
-            response = requests.get(refs_url, headers=self.azuredevops_headers, params=params, timeout=30)
+            response = session.get(refs_url, headers=self.azuredevops_headers, params=params, timeout=30)
             if response.status_code != 200:
                 return False
             
@@ -365,7 +376,7 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
                 'api-version': '6.0'
             }
             
-            response = requests.get(items_url, headers=self.azuredevops_headers, params=params, timeout=30)
+            response = session.get(items_url, headers=self.azuredevops_headers, params=params, timeout=30)
             return response.status_code == 200
             
         except Exception as e:
@@ -404,7 +415,7 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
             refs_url = f"https://dev.azure.com/{self.azuredevops_config['organization']}/{self.azuredevops_config['project']}/_apis/git/repositories/{self.azuredevops_config['wiki_identifier']}/refs"
             params = {'filter': 'heads/wikiMaster', 'api-version': '6.0'}
             
-            response = requests.get(refs_url, headers=self.azuredevops_headers, params=params)
+            response = session.get(refs_url, headers=self.azuredevops_headers, params=params)
             
             if response.status_code == 200:
                 refs_data = response.json()['value']
@@ -421,6 +432,14 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
             
             # Add wiki pages
             for file_path, file_data in wiki_files.items():
+
+                # if unsure if it exist, delete first
+                changes.append({
+                    "changeType": "delete",
+                    "item": {"path": f"/{file_path}"}
+                })
+
+                # add file to commit
                 changes.append({
                     "changeType": "add",
                     "item": {"path": f"/{file_path}"},
@@ -442,6 +461,11 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
                     # Extract safe filename from azure_path  
                     safe_filename = azure_path.split('/')[-1]
                     if safe_filename not in self.committed_images and not self.check_file_exists_in_azure(azure_path):
+
+                        changes.append({
+                            "changeType": "delete",
+                            "item": {"path": azure_path}
+                        })
                         changes.append({
                             "changeType": "add",
                             "item": {"path": azure_path},
@@ -472,7 +496,7 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
                 }]
             }
             
-            commit_response = requests.post(
+            commit_response = session.post(
                 f"{commits_url}?api-version=6.0",
                 headers=self.azuredevops_headers,
                 json=commit_data,
@@ -555,6 +579,12 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
                 # Add wiki pages for this level
                 for file_path in level_files:
                     file_data = wiki_files[file_path]
+
+                    changes.append({
+                        "changeType": "delete",
+                        "item": {"path": f"/{file_path}"}
+                    })
+
                     changes.append({
                         "changeType": "add",
                         "item": {"path": f"/{file_path}"},
@@ -589,6 +619,12 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
                         with open(local_path, 'rb') as f:
                             image_content = base64.b64encode(f.read()).decode()
                         
+
+                        changes.append({
+                            "changeType": "delete",
+                            "item": {"path": f"/.attachments/{image_filename}"}
+                        })
+
                         changes.append({
                             "changeType": "add",
                             "item": {"path": f"/.attachments/{image_filename}"},
@@ -626,7 +662,7 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
                 print(f"  📏 Estimated commit size: {total_size:,} characters")
                 
                 # Commit this level
-                commit_response = requests.post(
+                commit_response = session.post(
                     f"https://dev.azure.com/{self.azuredevops_config['organization']}/{self.azuredevops_config['project']}/_apis/git/repositories/{self.azuredevops_config['wiki_identifier']}/pushes?api-version=6.0",
                     headers=self.azuredevops_headers,
                     json=commit_data,
@@ -659,7 +695,7 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
         
         try:
             # Get current commit ID
-            current_commit_id = self.get_current_commit_id()
+            # current_commit_id = self.get_current_commit_id()
             
             # Prepare all files and calculate their sizes
             all_files = []
@@ -748,10 +784,17 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
                 print(f"📤 Batch {batch_num}/{len(batches)}: {pages_count} pages, {images_count} images, {batch_size/(1024*1024):.1f} MB")
                 
                 # Prepare changes for this batch
-                changes = []
+                add_changes = []
+                delete_changes = []
                 for file_item in batch:
                     if file_item['type'] == 'page':
-                        changes.append({
+
+                        delete_changes.append({
+                            "changeType": "delete",
+                            "item": {"path": f"/{file_item['path']}"}
+                        })
+
+                        add_changes.append({
                             "changeType": "add",
                             "item": {"path": f"/{file_item['path']}"},
                             "newContent": {
@@ -763,7 +806,13 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
                         import base64
                         with open(file_item['local_path'], 'rb') as f:
                             image_content = base64.b64encode(f.read()).decode()
-                        changes.append({
+
+                        delete_changes.append({
+                            "changeType": "delete",
+                            "item": {"path": f"/{file_item['path']}"}
+                        })
+
+                        add_changes.append({
                             "changeType": "add",
                             "item": {"path": f"/{file_item['path']}"},
                             "newContent": {
@@ -771,28 +820,55 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
                                 "contentType": "base64encoded"
                             }
                         })
-                
-                # Prepare commit data
-                commit_data = {
+
+                # Prepare delete commit data
+                delete_commit_data = {
                     "refUpdates": [
                         {
                             "name": "refs/heads/wikiMaster",
-                            "oldObjectId": current_commit_id
+                            "oldObjectId": self.get_current_commit_id()
                         }
                     ],
                     "commits": [
                         {
                             "comment": f"Confluence migration - Batch {batch_num}/{len(batches)} ({pages_count} pages, {images_count} images, {batch_size/(1024*1024):.1f} MB)",
-                            "changes": changes
+                            "changes": delete_changes
+                        }
+                    ]
+                }
+
+
+                # Commit this batch
+                commit_response = session.post(
+                    f"https://dev.azure.com/{self.azuredevops_config['organization']}/{self.azuredevops_config['project']}/_apis/git/repositories/{self.azuredevops_config['wiki_identifier']}/pushes?api-version=6.0",
+                    headers=self.azuredevops_headers,
+                    json=delete_commit_data,
+                    timeout=300  # Increase timeout for large batches
+                )
+
+                commit_response.raise_for_status()
+
+                # Prepare add commit data
+                add_commit_data = {
+                    "refUpdates": [
+                        {
+                            "name": "refs/heads/wikiMaster",
+                            "oldObjectId": self.get_current_commit_id()
+                        }
+                    ],
+                    "commits": [
+                        {
+                            "comment": f"Confluence migration - Batch {batch_num}/{len(batches)} ({pages_count} pages, {images_count} images, {batch_size/(1024*1024):.1f} MB)",
+                            "changes": add_changes
                         }
                     ]
                 }
                 
                 # Commit this batch
-                commit_response = requests.post(
+                commit_response = session.post(
                     f"https://dev.azure.com/{self.azuredevops_config['organization']}/{self.azuredevops_config['project']}/_apis/git/repositories/{self.azuredevops_config['wiki_identifier']}/pushes?api-version=6.0",
                     headers=self.azuredevops_headers,
-                    json=commit_data,
+                    json=add_commit_data,
                     timeout=300  # Increase timeout for large batches
                 )
                 
@@ -820,7 +896,7 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
             refs_url = f"https://dev.azure.com/{self.azuredevops_config['organization']}/{self.azuredevops_config['project']}/_apis/git/repositories/{self.azuredevops_config['wiki_identifier']}/refs"
             params = {'filter': 'heads/wikiMaster', 'api-version': '6.0'}
             
-            response = requests.get(refs_url, headers=self.azuredevops_headers, params=params)
+            response = session.get(refs_url, headers=self.azuredevops_headers, params=params)
             
             if response.status_code == 200:
                 refs_data = response.json()['value']
