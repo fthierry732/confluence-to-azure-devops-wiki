@@ -9,7 +9,7 @@ import os
 import sys
 import threading
 # from confluence_migration_fixed import ConfluenceToAzureDevOpsMigrator as FlatMigrator
-from migration_utilities import MigrationUtilities, load_config_from_env, get_config_with_env_fallback
+from migration_utilities import MigrationUtilities, load_config_from_env
 import importlib
 import sys
 

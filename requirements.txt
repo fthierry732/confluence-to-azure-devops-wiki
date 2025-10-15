@@ -3,3 +3,8 @@ html2text>=2020.1.16
 pathlib2>=2.3.7
 flask>=3.1.2
 python-dotenv>=1.0.0
+
+# Optional proxy support dependencies
+# Uncomment the following lines if you need proxy support:
+# pypac>=0.16.0  # For PAC proxy support
+# requests[socks]>=2.28.0  # For SOCKS proxy support (replaces requests above)
