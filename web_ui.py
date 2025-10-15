@@ -9,9 +9,19 @@ import os
 import sys
 import threading
 # from confluence_migration_fixed import ConfluenceToAzureDevOpsMigrator as FlatMigrator
-from migration_utilities import MigrationUtilities
+from migration_utilities import MigrationUtilities, load_config_from_env, get_config_with_env_fallback
 import importlib
 import sys
+
+# Load environment variables from .env file if it exists
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    print("✅ Environment variables loaded from .env file")
+except ImportError:
+    print("⚠️ python-dotenv not installed. Install with: pip install python-dotenv")
+except Exception as e:
+    print(f"⚠️ Could not load .env file: {e}")
 
 # Force reload the corrected migration module to avoid caching
 if 'confluence_migration_corrected' in sys.modules:
@@ -31,19 +41,23 @@ class MigrationWebUI:
         self.migration_logs = []
 
     def create_config_from_form(self, form_data):
-        """Create configuration dictionaries from form data"""
+        """Create configuration dictionaries from form data with environment variable fallback"""
+        # Try to load from environment variables first
+        env_confluence, env_azuredevops = load_config_from_env()
+        
+        # Use form data if provided, otherwise fall back to environment variables
         confluence_config = {
-            'base_url': form_data.get('confluence_base_url'),
-            'username': form_data.get('confluence_username'),
-            'api_token': form_data.get('confluence_api_token'),
-            'space_key': form_data.get('confluence_space_key')
+            'base_url': form_data.get('confluence_base_url') or (env_confluence.get('base_url') if env_confluence else None),
+            'username': form_data.get('confluence_username') or (env_confluence.get('username') if env_confluence else None),
+            'api_token': form_data.get('confluence_api_token') or (env_confluence.get('api_token') if env_confluence else None),
+            'space_key': form_data.get('confluence_space_key') or (env_confluence.get('space_key') if env_confluence else None)
         }
         
         azuredevops_config = {
-            'organization': form_data.get('azuredevops_organization'),
-            'project': form_data.get('azuredevops_project'),
-            'wiki_identifier': form_data.get('azuredevops_wiki_identifier'),
-            'personal_access_token': form_data.get('azuredevops_pat')
+            'organization': form_data.get('azuredevops_organization') or (env_azuredevops.get('organization') if env_azuredevops else None),
+            'project': form_data.get('azuredevops_project') or (env_azuredevops.get('project') if env_azuredevops else None),
+            'wiki_identifier': form_data.get('azuredevops_wiki_identifier') or (env_azuredevops.get('wiki_identifier') if env_azuredevops else None),
+            'personal_access_token': form_data.get('azuredevops_pat') or (env_azuredevops.get('personal_access_token') if env_azuredevops else None)
         }
         
         return confluence_config, azuredevops_config
@@ -128,6 +142,40 @@ web_ui = MigrationWebUI()
 def index():
     """Serve the main page"""
     return render_template('index.html')
+
+@app.route('/config', methods=['GET'])
+def get_config():
+    """Get current configuration including environment variables"""
+    try:
+        # Try to load from environment variables
+        env_confluence, env_azuredevops = load_config_from_env()
+        
+        config = {
+            'confluence': {
+                'base_url': env_confluence.get('base_url') if env_confluence else '',
+                'username': env_confluence.get('username') if env_confluence else '',
+                'api_token': env_confluence.get('api_token') if env_confluence else '',
+                'space_key': env_confluence.get('space_key') if env_confluence else ''
+            },
+            'azuredevops': {
+                'organization': env_azuredevops.get('organization') if env_azuredevops else '',
+                'project': env_azuredevops.get('project') if env_azuredevops else '',
+                'wiki_identifier': env_azuredevops.get('wiki_identifier') if env_azuredevops else '',
+                'pat': env_azuredevops.get('personal_access_token') if env_azuredevops else ''
+            },
+            'has_env_config': env_confluence is not None and env_azuredevops is not None
+        }
+        
+        return jsonify({
+            'success': True,
+            'config': config
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
 
 @app.route('/validate', methods=['POST'])
 def validate():

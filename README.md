@@ -114,13 +114,45 @@ A comprehensive tool for migrating content from Confluence spaces to Azure DevOp
 
 ## Configuration Parameters
 
-### Confluence Settings
+### Environment Variables (Recommended)
+
+You can set up your configuration using environment variables to avoid entering credentials each time. Create a `.env` file in the project root:
+
+```bash
+# Copy the example file
+cp .env.example .env
+
+# Edit with your actual values
+nano .env
+```
+
+**Required Environment Variables:**
+
+**Confluence Configuration:**
+- `CONFLUENCE_BASE_URL`: Your Confluence instance URL (e.g., `https://yourcompany.atlassian.net`)
+- `CONFLUENCE_USERNAME`: Your Atlassian account email
+- `CONFLUENCE_API_TOKEN`: Token created in step 1
+- `CONFLUENCE_SPACE_KEY`: The key of the space to migrate
+
+**Azure DevOps Configuration:**
+- `DEVOPS_ORGANIZATION`: Your Azure DevOps organization name (from URL)
+- `DEVOPS_PROJECT`: Your project name
+- `DEVOPS_WIKI_IDENTIFIER`: Usually `{ProjectName}.wiki`
+- `DEVOPS_PAT`: PAT created in step 2
+
+When environment variables are set, the web interface will automatically populate the form fields, and the command-line scripts will use these values by default.
+
+### Manual Configuration
+
+If you prefer not to use environment variables, you can configure the settings manually:
+
+**Confluence Settings:**
 - **Base URL**: Your Confluence instance URL (e.g., `https://yourcompany.atlassian.net`)
 - **Username**: Your Atlassian account email
 - **API Token**: Token created in step 1
 - **Space Key**: The key of the space to migrate
 
-### Azure DevOps Settings
+**Azure DevOps Settings:**
 - **Organization**: Your Azure DevOps organization name (from URL)
 - **Project**: Your project name
 - **Wiki Identifier**: Usually `{ProjectName}.wiki`

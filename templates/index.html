@@ -199,6 +199,34 @@
     </div>
 
     <script>
+        // Load configuration from environment variables on page load
+        async function loadConfigFromEnv() {
+            try {
+                const response = await fetch('/config');
+                const result = await response.json();
+                
+                if (result.success && result.config.has_env_config) {
+                    // Populate form fields with environment variables
+                    document.getElementById('confluence_base_url').value = result.config.confluence.base_url || '';
+                    document.getElementById('confluence_username').value = result.config.confluence.username || '';
+                    document.getElementById('confluence_api_token').value = result.config.confluence.api_token || '';
+                    document.getElementById('confluence_space_key').value = result.config.confluence.space_key || '';
+                    
+                    document.getElementById('azuredevops_organization').value = result.config.azuredevops.organization || '';
+                    document.getElementById('azuredevops_project').value = result.config.azuredevops.project || '';
+                    document.getElementById('azuredevops_wiki_identifier').value = result.config.azuredevops.wiki_identifier || '';
+                    document.getElementById('azuredevops_pat').value = result.config.azuredevops.pat || '';
+                    
+                    showStatus('✅ Configuration loaded from environment variables', 'success');
+                }
+            } catch (error) {
+                console.log('No environment configuration found or error loading config:', error);
+            }
+        }
+
+        // Load config when page loads
+        document.addEventListener('DOMContentLoaded', loadConfigFromEnv);
+
         function showStatus(message, type) {
             const statusDiv = document.getElementById('status');
             statusDiv.className = `status-${type}`;

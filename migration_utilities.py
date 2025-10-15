@@ -5,20 +5,85 @@ Handles common scenarios and cleanup tasks
 """
 
 import requests
-import json
 import re
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 import base64
 
+# Load environment variables from .env file if it exists
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    print("✅ Environment variables loaded from .env file")
+except ImportError:
+    print("⚠️ python-dotenv not installed. Install with: pip install python-dotenv")
+except Exception as e:
+    print(f"⚠️ Could not load .env file: {e}")
+
 from pypac import PACSession, get_pac
-from pypac.parser import PACFile
 
 # Load PAC file from URL or string
 pac = get_pac(url='http://webproxy.francotyp.com:8080/proxy.pac')
 
 # Create a session that uses the PAC file
 session = PACSession(pac)
+
+def load_config_from_env() -> tuple[Optional[Dict], Optional[Dict]]:
+    """
+    Load configuration from environment variables.
+    Returns tuple of (confluence_config, azuredevops_config) or (None, None) if not all variables are present.
+    """
+    # Required Confluence environment variables
+    confluence_vars = {
+        'base_url': os.getenv('CONFLUENCE_BASE_URL'),
+        'username': os.getenv('CONFLUENCE_USERNAME'),
+        'api_token': os.getenv('CONFLUENCE_API_TOKEN'),
+        'space_key': os.getenv('CONFLUENCE_SPACE_KEY')
+    }
+    
+    # Required Azure DevOps environment variables
+    azuredevops_vars = {
+        'organization': os.getenv('DEVOPS_ORGANIZATION'),
+        'project': os.getenv('DEVOPS_PROJECT'),
+        'wiki_identifier': os.getenv('DEVOPS_WIKI_IDENTIFIER'),
+        'personal_access_token': os.getenv('DEVOPS_PAT')
+    }
+    
+    # Check if all Confluence variables are present
+    confluence_missing = [k for k, v in confluence_vars.items() if not v]
+    azuredevops_missing = [k for k, v in azuredevops_vars.items() if not v]
+    
+    if confluence_missing:
+        print(f"⚠️ Missing Confluence environment variables: {', '.join(confluence_missing)}")
+        return None, None
+    
+    if azuredevops_missing:
+        print(f"⚠️ Missing Azure DevOps environment variables: {', '.join(azuredevops_missing)}")
+        return None, None
+    
+    print("✅ All required environment variables found")
+    return confluence_vars, azuredevops_vars
+
+def get_config_with_env_fallback(confluence_config: Optional[Dict] = None, 
+                                azuredevops_config: Optional[Dict] = None) -> tuple[Dict, Dict]:
+    """
+    Get configuration with environment variable fallback.
+    If configs are provided, use them. Otherwise, try to load from environment variables.
+    """
+    # Try to load from environment if configs not provided
+    if not confluence_config or not azuredevops_config:
+        env_confluence, env_azuredevops = load_config_from_env()
+        if env_confluence and env_azuredevops:
+            print("📋 Using configuration from environment variables")
+            return env_confluence, env_azuredevops
+        else:
+            print("⚠️ Could not load complete configuration from environment variables")
+    
+    # Use provided configs or return empty configs
+    confluence_config = confluence_config or {}
+    azuredevops_config = azuredevops_config or {}
+    
+    return confluence_config, azuredevops_config
 
 class MigrationUtilities:
     def __init__(self, confluence_config: Dict, azuredevops_config: Dict):
@@ -71,11 +136,11 @@ class MigrationUtilities:
                 })
         
         # Print preview
-        print(f"\n--- Migration Preview ---")
+        print("\n--- Migration Preview ---")
         print(f"Total pages: {preview['total_pages']}")
         print(f"Total attachments: {preview['total_attachments']}")
         print(f"Image attachments: {preview['image_attachments']}")
-        print(f"Pages by level:")
+        print("Pages by level:")
         for level, count in sorted(preview['pages_by_level'].items()):
             print(f"  Level {level}: {count} pages")
         
@@ -223,7 +288,7 @@ class MigrationUtilities:
                         })
         
         # Print report
-        print(f"\n--- Link Mapping Report ---")
+        print("\n--- Link Mapping Report ---")
         print(f"Internal links to update: {len(link_report['internal_links'])}")
         print(f"External links (unchanged): {len(link_report['external_links'])}")
         print(f"Image links to process: {len(link_report['image_links'])}")

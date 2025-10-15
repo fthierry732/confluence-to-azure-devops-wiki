@@ -14,10 +14,18 @@ from pathlib import Path
 import html2text
 from typing import Dict, List, Tuple, Optional
 import time
-base64
+
+# Load environment variables from .env file if it exists
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    print("✅ Environment variables loaded from .env file")
+except ImportError:
+    print("⚠️ python-dotenv not installed. Install with: pip install python-dotenv")
+except Exception as e:
+    print(f"⚠️ Could not load .env file: {e}")
 
 from pypac import PACSession, get_pac
-from pypac.parser import PACFile
 
 # Load PAC file from URL or string
 pac = get_pac(url='http://webproxy.francotyp.com:8080/proxy.pac')
@@ -916,19 +924,42 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
 
 # Example usage
 if __name__ == "__main__":
+    # Try to load configuration from environment variables first
     confluence_config = {
-        "base_url": "https://yourcompany.atlassian.net",
-        "username": "your.email@company.com", 
-        "api_token": "YOUR_TOKEN_HERE"
+        "base_url": os.getenv('CONFLUENCE_BASE_URL', "https://yourcompany.atlassian.net"),
+        "username": os.getenv('CONFLUENCE_USERNAME', "your.email@company.com"), 
+        "api_token": os.getenv('CONFLUENCE_API_TOKEN', "YOUR_TOKEN_HERE")
     }
     
     azuredevops_config = {
-        "organization": "YourOrganization",
-        "project": "YourProject",
-        "wiki_identifier": "YourProject.wiki",
-        "personal_access_token": "YOUR_TOKEN_HERE"
+        "organization": os.getenv('DEVOPS_ORGANIZATION', "YourOrganization"),
+        "project": os.getenv('DEVOPS_PROJECT', "YourProject"),
+        "wiki_identifier": os.getenv('DEVOPS_WIKI_IDENTIFIER', "YourProject.wiki"),
+        "personal_access_token": os.getenv('DEVOPS_PAT', "YOUR_TOKEN_HERE")
     }
     
+    space_key = os.getenv('CONFLUENCE_SPACE_KEY', "YOUR_SPACE_KEY")
+    
+    # Check if we have environment variables loaded
+    env_vars_loaded = all([
+        confluence_config["base_url"] != "https://yourcompany.atlassian.net",
+        confluence_config["username"] != "your.email@company.com",
+        confluence_config["api_token"] != "YOUR_TOKEN_HERE",
+        azuredevops_config["organization"] != "YourOrganization",
+        azuredevops_config["project"] != "YourProject",
+        azuredevops_config["wiki_identifier"] != "YourProject.wiki",
+        azuredevops_config["personal_access_token"] != "YOUR_TOKEN_HERE",
+        space_key != "YOUR_SPACE_KEY"
+    ])
+    
+    if env_vars_loaded:
+        print("✅ Using configuration from environment variables")
+    else:
+        print("⚠️ Using default configuration. Please set environment variables or update the script.")
+        print("Required environment variables:")
+        print("  CONFLUENCE_BASE_URL, CONFLUENCE_USERNAME, CONFLUENCE_API_TOKEN, CONFLUENCE_SPACE_KEY")
+        print("  DEVOPS_ORGANIZATION, DEVOPS_PROJECT, DEVOPS_WIKI_IDENTIFIER, DEVOPS_PAT")
+    
     migrator = ConfluenceToAzureDevOpsHierarchicalMigrator(confluence_config, azuredevops_config)
-    success = migrator.migrate_space_corrected("YOUR_SPACE_KEY")
+    success = migrator.migrate_space_corrected(space_key)
     print(f"Migration success: {success}")
