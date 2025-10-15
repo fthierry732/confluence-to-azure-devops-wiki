@@ -16,6 +16,7 @@ A comprehensive tool for migrating content from Confluence spaces to Azure DevOp
 - Python 3.7+
 - Confluence Cloud account with API access
 - Azure DevOps organization with a project and wiki
+- (Optional) Proxy configuration if your organization uses corporate proxies
 
 ## Quick Start
 
@@ -28,7 +29,15 @@ A comprehensive tool for migrating content from Confluence spaces to Azure DevOp
 2. **Install dependencies**:
    ```bash
    pip install -r requirements.txt
-   pip install flask
+   ```
+   
+   **For proxy support (if needed)**:
+   ```bash
+   # For PAC proxy support
+   pip install pypac
+   
+   # For SOCKS proxy support
+   pip install requests[socks]
    ```
 
 3. **Run the web interface**:
@@ -140,6 +149,13 @@ nano .env
 - `DEVOPS_WIKI_IDENTIFIER`: Usually `{ProjectName}.wiki`
 - `DEVOPS_PAT`: PAT created in step 2
 
+**Proxy Configuration (Optional):**
+- `PROXY_PAC_URL`: PAC file URL for automatic proxy configuration
+- `HTTP_PROXY`: HTTP proxy URL (e.g., `http://proxy.company.com:8080`)
+- `HTTPS_PROXY`: HTTPS proxy URL (e.g., `http://proxy.company.com:8080`)
+- `SOCKS_PROXY`: SOCKS proxy URL (e.g., `socks5://proxy.company.com:1080`)
+- `NO_PROXY`: Set to `true` to explicitly disable proxy
+
 When environment variables are set, the web interface will automatically populate the form fields, and the command-line scripts will use these values by default.
 
 ### Manual Configuration
@@ -203,6 +219,67 @@ azuredevops_config = {
 # Run migration
 migrator = ConfluenceToAzureDevOpsHierarchicalMigrator(confluence_config, azuredevops_config)
 success = migrator.migrate_space_corrected('YOURSPACE')
+```
+
+## Proxy Configuration
+
+The migration tool supports various proxy configurations commonly used in corporate environments:
+
+### Supported Proxy Types
+
+1. **PAC Proxy (Proxy Auto-Configuration)**
+   - Automatically configures proxy based on URL patterns
+   - Set `PROXY_PAC_URL` environment variable
+   - Requires `pypac` library: `pip install pypac`
+
+2. **HTTP/HTTPS Proxy**
+   - Standard HTTP proxy for web traffic
+   - Set `HTTP_PROXY` and/or `HTTPS_PROXY` environment variables
+   - Built-in support with `requests` library
+
+3. **SOCKS Proxy**
+   - SOCKS4/SOCKS5 proxy support
+   - Set `SOCKS_PROXY` environment variable
+   - Requires `requests[socks]` library: `pip install requests[socks]`
+
+4. **No Proxy (Direct Connection)**
+   - Explicitly disable proxy usage
+   - Set `NO_PROXY=true` environment variable
+
+### Testing Proxy Configuration
+
+Use the included test script to verify your proxy setup:
+
+```bash
+python3 test_proxy.py
+```
+
+This will:
+- Show current proxy environment variables
+- Test different proxy configurations
+- Display your external IP address to verify proxy is working
+
+### Example Proxy Configurations
+
+**PAC Proxy:**
+```bash
+export PROXY_PAC_URL=http://webproxy.company.com:8080/proxy.pac
+```
+
+**HTTP Proxy:**
+```bash
+export HTTP_PROXY=http://proxy.company.com:8080
+export HTTPS_PROXY=http://proxy.company.com:8080
+```
+
+**SOCKS Proxy:**
+```bash
+export SOCKS_PROXY=socks5://proxy.company.com:1080
+```
+
+**No Proxy:**
+```bash
+export NO_PROXY=true
 ```
 
 ## Troubleshooting
