@@ -20,13 +20,11 @@ except ImportError:
 except Exception as e:
     print(f"⚠️ Could not load .env file: {e}")
 
-from pypac import PACSession, get_pac
+# Import the new proxy configuration system
+from proxy_config import create_proxy_session, get_global_session, set_global_session
 
-# Load PAC file from URL or string
-pac = get_pac(url='http://webproxy.francotyp.com:8080/proxy.pac')
-
-# Create a session that uses the PAC file
-session = PACSession(pac)
+# Create a session with proxy configuration
+session = create_proxy_session(test_connection=True)
 
 def load_config_from_env() -> tuple[Optional[Dict], Optional[Dict]]:
     """
