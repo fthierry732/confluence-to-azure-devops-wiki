@@ -188,7 +188,7 @@ class ProxyConfig:
         """Test the proxy connection"""
         try:
             print(f"🧪 Testing connection to {test_url}")
-            response = self.get_session().get(test_url, timeout=10)
+            response = self.get_session().get(test_url, timeout=1)
             
             if response.status_code == 200:
                 print("✅ Connection test successful")
