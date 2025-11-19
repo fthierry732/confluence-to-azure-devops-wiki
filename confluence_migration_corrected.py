@@ -788,71 +788,61 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
                 images_count = len([f for f in batch if f['type'] == 'image'])
                 
                 print(f"📤 Batch {batch_num}/{len(batches)}: {pages_count} pages, {images_count} images, {batch_size/(1024*1024):.1f} MB")
+                print(f"  🔍 Checking which files already exist in Azure DevOps...")
                 
-                # Prepare changes for this batch
+                # Check which files already exist and prepare changes only for new files
                 add_changes = []
-                delete_changes = []
+                skipped_pages = 0
+                skipped_images = 0
+                
                 for file_item in batch:
+                    file_path = f"/{file_item['path']}"
+                    
+                    # Check if file already exists in Azure DevOps
+                    if self.check_file_exists_in_azure(file_path):
+                        if file_item['type'] == 'page':
+                            skipped_pages += 1
+                            print(f"  ⏭️ Skipping existing page: {file_item['path']}")
+                        else:
+                            skipped_images += 1
+                            print(f"  ⏭️ Skipping existing image: {file_item['path']}")
+                        continue
+                    
+                    # File doesn't exist, add it to changes
                     if file_item['type'] == 'page':
-
-                        delete_changes.append({
-                            "changeType": "delete",
-                            "item": {"path": f"/{file_item['path']}"}
-                        })
-
                         add_changes.append({
                             "changeType": "add",
-                            "item": {"path": f"/{file_item['path']}"},
+                            "item": {"path": file_path},
                             "newContent": {
                                 "content": file_item['content'],
                                 "contentType": "rawtext"
                             }
                         })
+                        print(f"  ➕ Adding new page: {file_item['path']}")
                     else:  # image - lazy load content now
                         import base64
                         with open(file_item['local_path'], 'rb') as f:
                             image_content = base64.b64encode(f.read()).decode()
 
-                        delete_changes.append({
-                            "changeType": "delete",
-                            "item": {"path": f"/{file_item['path']}"}
-                        })
-
                         add_changes.append({
                             "changeType": "add",
-                            "item": {"path": f"/{file_item['path']}"},
+                            "item": {"path": file_path},
                             "newContent": {
                                 "content": image_content,
                                 "contentType": "base64encoded"
                             }
                         })
-
-                # Prepare delete commit data
-                delete_commit_data = {
-                    "refUpdates": [
-                        {
-                            "name": "refs/heads/wikiMaster",
-                            "oldObjectId": self.get_current_commit_id()
-                        }
-                    ],
-                    "commits": [
-                        {
-                            "comment": f"Confluence migration - Batch {batch_num}/{len(batches)} ({pages_count} pages, {images_count} images, {batch_size/(1024*1024):.1f} MB)",
-                            "changes": delete_changes
-                        }
-                    ]
-                }
-
-
-                # Commit this batch
-                commit_response = session.post(
-                    f"https://dev.azure.com/{self.azuredevops_config['organization']}/{self.azuredevops_config['project']}/_apis/git/repositories/{self.azuredevops_config['wiki_identifier']}/pushes?api-version=6.0",
-                    headers=self.azuredevops_headers,
-                    json=delete_commit_data,
-                    timeout=300  # Increase timeout for large batches
-                )
-
-                commit_response.raise_for_status()
+                        print(f"  ➕ Adding new image: {file_item['path']}")
+                
+                # If no changes needed, skip this batch
+                if not add_changes:
+                    print(f"  ⏭️ Batch {batch_num} skipped - all files already exist")
+                    continue
+                
+                actual_pages = len([c for c in add_changes if c['item']['path'].endswith('.md') or c['item']['path'].endswith('.order')])
+                actual_images = len([c for c in add_changes if '/.attachments/' in c['item']['path']])
+                
+                print(f"  📊 Adding {actual_pages} new pages, {actual_images} new images (skipped {skipped_pages} pages, {skipped_images} images)")
 
                 # Prepare add commit data
                 add_commit_data = {
@@ -864,7 +854,7 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
                     ],
                     "commits": [
                         {
-                            "comment": f"Confluence migration - Batch {batch_num}/{len(batches)} ({pages_count} pages, {images_count} images, {batch_size/(1024*1024):.1f} MB)",
+                            "comment": f"Confluence migration - Batch {batch_num}/{len(batches)} ({actual_pages} new pages, {actual_images} new images)",
                             "changes": add_changes
                         }
                     ]
