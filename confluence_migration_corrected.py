@@ -363,6 +363,9 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
     def check_file_exists_in_azure(self, file_path: str) -> bool:
         """Check if a file already exists in Azure DevOps Git repository"""
         try:
+            # Rate limiting - small delay between API calls
+            time.sleep(0.1)
+            
             # Get current commit ID
             refs_url = f"https://dev.azure.com/{self.azuredevops_config['organization']}/{self.azuredevops_config['project']}/_apis/git/repositories/{self.azuredevops_config['wiki_identifier']}/refs"
             params = {'filter': 'heads/wikiMaster', 'api-version': '6.0'}
@@ -872,6 +875,10 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
                     new_commit_data = commit_response.json()
                     current_commit_id = new_commit_data['commits'][0]['commitId']
                     print(f"  ✅ Batch {batch_num} committed: {current_commit_id[:8]}...")
+                    
+                    # Rate limiting - delay between batch commits
+                    if batch_num < len(batches):
+                        time.sleep(1)
                 else:
                     print(f"  ❌ Batch {batch_num} failed: {commit_response.status_code}")
                     print(f"     Error: {commit_response.text[:500]}")
