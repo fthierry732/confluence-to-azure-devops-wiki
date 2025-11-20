@@ -14,6 +14,9 @@ from pathlib import Path
 import html2text
 from typing import Dict, List, Tuple, Optional
 import time
+from datetime import datetime
+from bs4 import BeautifulSoup
+import glob
 
 # Load environment variables from .env file if it exists
 try:
@@ -305,6 +308,9 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
             # Get page attachments
             attachments = self.get_page_attachments(page_id)
             
+            # Use BeautifulSoup to process all images at once
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
             for attachment in attachments:
                 try:
                     filename = attachment['title']
@@ -313,7 +319,7 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
                         local_path = self.download_image_safe(attachment, page_id)
                         
                         if local_path:
-                            # Replace references in HTML - Fixed variable scope
+                            # Calculate safe filename (same logic as download_image_safe)
                             if '.' in filename:
                                 name_part = filename.rsplit('.', 1)[0]
                                 ext_part = filename.rsplit('.', 1)[1]
@@ -323,42 +329,106 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
                             
                             # Replace Confluence image references with Azure DevOps Wiki markdown syntax
                             # Azure DevOps Wiki requires: ![alt](.attachments/file.ext) format
+                            # No subfolders - directly in .attachments/
                             attachment_path = f".attachments/{safe_filename}"
                             
-                            # CORRECTED Confluence image reference patterns - FIXED to avoid content truncation
-                            patterns_to_replace = [
-                                # Main pattern: <ac:image...><ri:attachment ri:filename="filename"/></ac:image>
-                                # Use non-greedy matching and ensure we only match the specific image block
-                                f'<ac:image[^>]*>[^<]*<ri:attachment ri:filename="{re.escape(filename)}"[^>]*/?>[^<]*</ac:image>',
-                                # Alternative pattern for self-closing ri:attachment
-                                f'<ac:image[^>]*><ri:attachment ri:filename="{re.escape(filename)}"[^>]*/></ac:image>',
-                                # Fallback patterns  
-                                f'<ac:image[^>]*ac:title="{re.escape(filename)}"[^>]*></ac:image>',
-                                f'<span class="confluence-embedded-file-wrapper[^"]*"><img[^>]*title="{re.escape(filename)}"[^>]*></span>',
-                                f'src="/wiki/download/attachments/{page_id}/{re.escape(filename)}"'
-                            ]
+                            # Find all img tags that reference this filename
+                            # Check various patterns: direct filename, with page_id path, in URL params
+                            img_tags = []
+                            seen_tags = set()
                             
-                            # Replace with proper Azure DevOps Wiki markdown syntax
-                            for pattern in patterns_to_replace:
-                                html_content = re.sub(
-                                    pattern, 
-                                    f'![{safe_filename}]({attachment_path})',
-                                    html_content,
-                                    flags=re.IGNORECASE | re.DOTALL
-                                )
+                            # Find by direct filename in src
+                            for img in soup.find_all('img', src=re.compile(re.escape(filename))):
+                                if id(img) not in seen_tags:
+                                    img_tags.append(img)
+                                    seen_tags.add(id(img))
                             
-                            print(f"    📎 Processed image: {filename} → {attachment_path}")
+                            # Find by data-image-src
+                            for img in soup.find_all('img', {'data-image-src': re.compile(re.escape(filename))}):
+                                if id(img) not in seen_tags:
+                                    img_tags.append(img)
+                                    seen_tags.add(id(img))
+                            
+                            # Find by attachments path
+                            for img in soup.find_all('img', src=re.compile(re.escape(f'attachments/{page_id}/{filename}'))):
+                                if id(img) not in seen_tags:
+                                    img_tags.append(img)
+                                    seen_tags.add(id(img))
+                            
+                            # Find by wiki download path
+                            for img in soup.find_all('img', src=re.compile(re.escape(f'/wiki/download/attachments/{page_id}/{filename}'))):
+                                if id(img) not in seen_tags:
+                                    img_tags.append(img)
+                                    seen_tags.add(id(img))
+                            
+                            # Also find ac:image tags with ri:attachment
+                            for ac_image in soup.find_all('ac:image'):
+                                ri_attachment = ac_image.find('ri:attachment', {'ri:filename': filename})
+                                if ri_attachment:
+                                    # Extract width/length from ac:image attributes
+                                    width = ac_image.get('ac:width') or ac_image.get('ac:thumbnail')
+                                    height = ac_image.get('ac:height')
+                                    
+                                    # Build markdown with dimensions
+                                    dimensions = ""
+                                    if width and height:
+                                        dimensions = f" ={width}x{height}"
+                                    elif width:
+                                        dimensions = f" ={width}x{width}"
+                                    
+                                    # Get alt text from ac:image or use safe_filename
+                                    alt_text = ac_image.get('ac:alt') or ac_image.get('ac:title') or safe_filename
+                                    
+                                    markdown_img = f'![{alt_text}]({attachment_path}{dimensions})'
+                                    
+                                    # Replace the ac:image tag
+                                    ac_image.replace_with(markdown_img)
+                                    print(f"    📎 Processed image: {filename} → {attachment_path}{dimensions}")
+                            
+                            # Process img tags
+                            for img in img_tags:
+                                # Extract width and height attributes
+                                width = img.get('width')
+                                height = img.get('height')
+                                
+                                # Also check for width in src URL (e.g., ?width=100)
+                                src = img.get('src', '')
+                                width_match = re.search(r'[?&]width=(\d+)', src)
+                                if width_match and not width:
+                                    width = width_match.group(1)
+                                
+                                # Build markdown with dimensions
+                                dimensions = ""
+                                if width and height:
+                                    dimensions = f" ={width}x{height}"
+                                elif width:
+                                    dimensions = f" ={width}x{width}"
+                                
+                                # Get alt text if available, otherwise use safe_filename
+                                alt_text = img.get('alt') or img.get('title') or safe_filename
+                                
+                                markdown_img = f'![{alt_text}]({attachment_path}{dimensions})'
+                                
+                                # Replace the img tag (or its parent span if it's a wrapper)
+                                parent = img.parent
+                                if parent and parent.name == 'span' and 'confluence-embedded-file-wrapper' in parent.get('class', []):
+                                    parent.replace_with(markdown_img)
+                                else:
+                                    img.replace_with(markdown_img)
+                                
+                                print(f"    📎 Processed image: {filename} → {attachment_path}{dimensions}")
                         else:
                             print(f"  ⚠️ Failed to download image: {filename}")
                             
                 except Exception as img_error:
                     print(f"  ⚠️ Image processing error for {attachment.get('title', 'unknown')}: {str(img_error)}")
                     continue
+            
+            return str(soup)
                     
         except Exception as attachment_error:
             print(f"  ⚠️ Attachment processing error: {str(attachment_error)}")
-        
-        return html_content
+            return html_content
 
     def check_file_exists_in_azure(self, file_path: str) -> bool:
         """Check if a file already exists in Azure DevOps Git repository"""
@@ -393,11 +463,151 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
             print(f"  ⚠️ Unable to check if file exists: {file_path}, assuming it doesn't exist")
             return False
 
+    def process_task_lists(self, html_content: str) -> str:
+        """Convert Confluence inline task lists to Markdown checkboxes"""
+        try:
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # Find all inline-task-list elements
+            task_lists = soup.find_all('ul', class_='inline-task-list')
+            
+            if not task_lists:
+                return html_content
+            
+            for task_list in task_lists:
+                markdown_tasks = []
+                
+                # Process each task item
+                for li in task_list.find_all('li', recursive=False):
+                    # Check if task is completed
+                    is_checked = False
+                    
+                    # Check for various indicators of completed tasks
+                    task_status = li.get('data-inline-task-status', '').lower()
+                    if task_status in ['complete', 'completed', 'done', 'true', '1']:
+                        is_checked = True
+                    
+                    li_classes = [c.lower() for c in li.get('class', [])]
+                    if any(keyword in li_classes for keyword in ['checked', 'complete', 'completed', 'done']):
+                        is_checked = True
+                    
+                    # Check for checked checkbox input
+                    checkbox_input = li.find('input', type='checkbox')
+                    if checkbox_input and checkbox_input.get('checked') is not None:
+                        is_checked = True
+                    
+                    # Extract task text - use html2text on just this li to preserve links
+                    # Create a temporary converter for this item
+                    temp_h = html2text.HTML2Text()
+                    temp_h.ignore_links = False
+                    temp_h.ignore_images = False
+                    temp_h.body_width = 0
+                    temp_h.unicode_snob = True
+                    task_text = temp_h.handle(str(li)).strip()
+                    # Remove the list marker that html2text might add
+                    task_text = re.sub(r'^\s*[-*+]\s+', '', task_text)
+                    
+                    # Use placeholder for checkbox to avoid html2text escaping
+                    # We'll replace these after html2text processes the content
+                    checkbox_placeholder = '__CHECKBOX_X__' if is_checked else '__CHECKBOX_EMPTY__'
+                    markdown_tasks.append(f"{checkbox_placeholder} {task_text}")
+                
+                # Replace the entire task list with a blockquote containing the markdown checkboxes
+                # Use div with br tags to ensure line breaks are preserved
+                if markdown_tasks:
+                    blockquote_tag = soup.new_tag('blockquote')
+                    blockquote_tag['class'] = '__TASK_LIST_MARKER__'
+                    
+                    # Create a div to hold all tasks with explicit line breaks
+                    div_tag = soup.new_tag('div')
+                    for i, task in enumerate(markdown_tasks):
+                        # Add the task text
+                        span_tag = soup.new_tag('span')
+                        span_tag.string = task
+                        div_tag.append(span_tag)
+                        # Add <br> between tasks (except after the last one)
+                        if i < len(markdown_tasks) - 1:
+                            br_tag = soup.new_tag('br')
+                            div_tag.append(br_tag)
+                    
+                    blockquote_tag.append(div_tag)
+                    task_list.replace_with(blockquote_tag)
+                    print(f"    ✅ Converted task list with {len(markdown_tasks)} items")
+            
+            return str(soup)
+            
+        except Exception as e:
+            print(f"  ⚠️ Error processing task lists: {str(e)}")
+            return html_content
+
+    def process_tables_newlines(self, html_content: str) -> str:
+        """Convert newlines in table cells to <br/> tags"""
+        try:
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # Find all tables
+            tables = soup.find_all('table')
+            
+            for table in tables:
+                # Find all cells (th and td)
+                cells = table.find_all(['th', 'td'])
+                
+                for cell in cells:
+                    # Process all text nodes in the cell
+                    from bs4 import NavigableString
+                    
+                    # Collect text nodes that need processing
+                    text_nodes = []
+                    for element in cell.descendants:
+                        if isinstance(element, NavigableString) and '\n' in element:
+                            text_nodes.append(element)
+                    
+                    # Process each text node
+                    for text_node in text_nodes:
+                        if '\n' in text_node:
+                            parts = text_node.split('\n')
+                            parent = text_node.parent
+                            
+                            # Build replacement: text parts with <br/> between them
+                            replacement_parts = []
+                            for i, part in enumerate(parts):
+                                if part:  # Add non-empty text
+                                    replacement_parts.append(NavigableString(part))
+                                # Add <br/> between parts
+                                if i < len(parts) - 1:
+                                    replacement_parts.append(soup.new_tag('br'))
+                            
+                            # Replace the text node with the new elements
+                            if replacement_parts:
+                                # Get the index of the text node
+                                try:
+                                    index = parent.contents.index(text_node)
+                                    # Remove the text node
+                                    text_node.extract()
+                                    # Insert replacement parts at the same position
+                                    for j, part in enumerate(replacement_parts):
+                                        parent.insert(index + j, part)
+                                except (ValueError, AttributeError):
+                                    # Fallback: just replace with first part
+                                    text_node.replace_with(replacement_parts[0] if replacement_parts else NavigableString(''))
+            
+            return str(soup)
+            
+        except Exception as e:
+            print(f"  ⚠️ Error processing table newlines: {str(e)}")
+            return html_content
+
     def convert_html_to_markdown(self, html_content: str, page_id: str) -> str:
         """Convert HTML to Markdown with image processing"""
         try:
             # First process images
             html_content = self.process_confluence_images(html_content, page_id)
+            
+            # Process tables - convert newlines to <br/> tags
+            html_content = self.process_tables_newlines(html_content)
+            
+            # Process task lists/checkboxes
+            html_content = self.process_task_lists(html_content)
             
             h = html2text.HTML2Text()
             h.ignore_links = False
@@ -407,6 +617,134 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
             h.unicode_snob = True
             
             markdown_content = h.handle(html_content)
+            
+            # Replace checkbox placeholders with actual checkboxes
+            # These placeholders avoid html2text escaping issues
+            markdown_content = markdown_content.replace('__CHECKBOX_X__', '- [x]')
+            markdown_content = markdown_content.replace('__CHECKBOX_EMPTY__', '- [ ]')
+            
+            # Fix escaped dashes in checkboxes (html2text escapes - as \-)
+            # Pattern: > \- [ ] or .\- [ ] should become > - [ ]
+            markdown_content = re.sub(r'([>.])\s*\\-(\s*\[[ x]\])', r'\1 -\2', markdown_content, flags=re.MULTILINE)
+            
+            # Fix blockquotes with task lists - split tasks that are on the same line
+            # Pattern from user output: > - [ ] task1.\- [ ] task2
+            # Split on period followed by \- [ or > - [ pattern
+            # First, handle the pattern: .\- [ ] (period, escaped dash, checkbox)
+            markdown_content = re.sub(r'\.(\\- \[[ x]\])', r'.\n> -\1', markdown_content, flags=re.MULTILINE)
+            
+            # Then handle: .> - [ ] pattern
+            markdown_content = re.sub(r'\.(> - \[[ x]\])', r'.\n\1', markdown_content, flags=re.MULTILINE)
+            
+            # Also handle cases where tasks are concatenated without periods
+            # Pattern: > - [ ] task1> - [ ] task2
+            markdown_content = re.sub(r'(> - \[[ x]\] [^>]+?)(> - \[[ x]\])', r'\1\n\2', markdown_content)
+            
+            # Remove any marker class references
+            markdown_content = re.sub(r'__TASK_LIST_MARKER__', '', markdown_content)
+            
+            # Remove blank lines between consecutive blockquote checkbox lines
+            # Pattern: any number of blank lines between > - [ ] lines should become single newline
+            # This matches: > - [ ] task\n\n\n> - [ ] next task and makes it: > - [ ] task\n> - [ ] next task
+            # Match: checkbox line, then one or more newlines (including blank lines), then next checkbox line
+            markdown_content = re.sub(r'(> - \[[ x]\] [^\n]+)\n{2,}(> - \[[ x]\])', r'\1\n\2', markdown_content, flags=re.MULTILINE)
+            
+            # Clean up formatting - ensure proper spacing
+            markdown_content = re.sub(r'^>\s*>', '>', markdown_content, flags=re.MULTILINE)
+            markdown_content = re.sub(r'^>\s+(- \[[ x]\])', r'> \1', markdown_content, flags=re.MULTILINE)
+            
+            # FIX TABLE FORMATTING
+            # 1. Remove excess asterisks in table cells (from *****text**** to **text**)
+            # Matches: | ... **...**...** ... |
+            # This is a simplified approach - we look for sequences of 3+ asterisks and reduce them
+            markdown_content = re.sub(r'\*{3,}', '**', markdown_content)
+            
+            # 2. Remove newlines within table rows
+            # Tables in markdown must be on a single line per row.
+            # html2text sometimes wraps table content or adds newlines.
+            # Pattern: Find table rows that are broken by newlines and join them.
+            # A table row starts with | and ends with | (potentially)
+            
+            # First, identify table blocks
+            # Tables usually start with a header row | ... | ... | followed by | --- | --- |
+            
+            # Clean up spacing around | characters to normalize
+            # markdown_content = re.sub(r'\s*\|\s*', ' | ', markdown_content)
+            
+            # Aggressive table cleanup:
+            # Find lines that look like table parts and join them if they are broken
+            # This is tricky with regex globally.
+            
+            # Specific fix for the user's issue:
+            # Join lines that are part of a table row but split by newline
+            # Look for lines starting with | or ending with | and join them with previous/next if appropriate
+            
+            lines = markdown_content.split('\n')
+            new_lines = []
+            in_table = False
+            current_table_row = ""
+            
+            i = 0
+            while i < len(lines):
+                line = lines[i].strip()
+                
+                # Check if this looks like a table divider row |---|---|
+                is_divider = re.match(r'^\|?[\s-]*:?---[-:]*[\s|]*$', line)
+                
+                # Check if this looks like a table row (starts and ends with |)
+                is_table_row = line.startswith('|') and line.endswith('|')
+                
+                # Check if this is a start of a table row
+                is_row_start = line.startswith('|')
+                
+                # Check if this is a continuation of a table row (ends with | but doesn't start with one)
+                # is_row_end = line.endswith('|') and not line.startswith('|')
+                
+                if is_divider:
+                    # Always add divider rows as is
+                    if current_table_row:
+                        new_lines.append(current_table_row)
+                        current_table_row = ""
+                    new_lines.append(line)
+                    in_table = True
+                elif is_table_row:
+                    # Complete row
+                    if current_table_row:
+                        new_lines.append(current_table_row)
+                        current_table_row = ""
+                    new_lines.append(line)
+                    in_table = True
+                elif is_row_start:
+                    # Start of a row that might be split
+                    if current_table_row:
+                        new_lines.append(current_table_row)
+                    current_table_row = line
+                    in_table = True
+                elif in_table and line:
+                    # Possibly inside a table, and we have content
+                    if current_table_row:
+                        # Append to current row
+                        current_table_row += " " + line
+                    else:
+                        # Not sure if table, just append
+                        new_lines.append(line)
+                else:
+                    # Empty line or non-table content
+                    if current_table_row:
+                        new_lines.append(current_table_row)
+                        current_table_row = ""
+                    new_lines.append(line)
+                    if not line:
+                        in_table = False
+                
+                i += 1
+            
+            if current_table_row:
+                new_lines.append(current_table_row)
+            
+            markdown_content = '\n'.join(new_lines)
+
+            # Remove excessive blank lines (but keep single blank lines)
             markdown_content = re.sub(r'\n{3,}', '\n\n', markdown_content)
             
             return markdown_content.strip()
@@ -527,6 +865,365 @@ class ConfluenceToAzureDevOpsHierarchicalMigrator:
             import traceback
             traceback.print_exc()
             return False
+
+    def parse_local_html_file(self, html_file_path: str) -> Dict:
+        """Parse a local Confluence HTML export file and extract page information"""
+        with open(html_file_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Extract page ID from file name (e.g., "test_34627.html" -> "34627")
+        page_id = os.path.basename(html_file_path).split('_')[-1].replace('.html', '')
+        
+        # Extract title
+        title_elem = soup.find('span', id='title-text')
+        if title_elem:
+            title = title_elem.get_text().strip()
+            # Remove space prefix (e.g., "test : test" -> "test")
+            if ':' in title:
+                title = title.split(':', 1)[-1].strip()
+        else:
+            title = page_id
+        
+        # Extract breadcrumbs (ancestors)
+        ancestors = []
+        breadcrumbs = soup.find('ol', id='breadcrumbs')
+        if breadcrumbs:
+            for crumb in breadcrumbs.find_all('li'):
+                link = crumb.find('a')
+                if link:
+                    ancestor_title = link.get_text().strip()
+                    ancestors.append({'title': ancestor_title})
+        
+        # Extract main content
+        main_content = soup.find('div', class_='wiki-content')
+        if main_content:
+            content_html = str(main_content)
+        else:
+            content_html = ""
+        
+        return {
+            'id': page_id,
+            'title': title,
+            'ancestors': ancestors,
+            'body': {'storage': {'value': content_html}}
+        }
+
+    def get_local_pages(self, export_folder: str) -> List[Dict]:
+        """Get all pages from a local Confluence export folder"""
+        pages = []
+        
+        # Find all HTML files (excluding index.html)
+        html_files = glob.glob(os.path.join(export_folder, '*.html'))
+        html_files = [f for f in html_files if not f.endswith('index.html')]
+        
+        print(f"📁 Found {len(html_files)} HTML files in {export_folder}")
+        
+        for html_file in html_files:
+            try:
+                page_data = self.parse_local_html_file(html_file)
+                pages.append(page_data)
+                print(f"  ✅ Parsed: {page_data['title']} (ID: {page_data['id']})")
+            except Exception as e:
+                print(f"  ⚠️ Error parsing {html_file}: {str(e)}")
+                continue
+        
+        return pages
+
+    def process_local_images(self, html_content: str, page_id: str, export_folder: str) -> str:
+        """Process images from local Confluence export folder"""
+        try:
+            # First, process base64-encoded images
+            html_content = self.process_base64_images(html_content, page_id)
+            
+            # Find attachments folder for this page
+            attachments_folder = os.path.join(export_folder, 'attachments', page_id)
+            
+            if not os.path.exists(attachments_folder):
+                print(f"  ⚠️ No attachments folder found for page {page_id}")
+                return html_content
+            
+            # Get all images in the attachments folder
+            image_files = []
+            for ext in ['*.jpg', '*.jpeg', '*.png', '*.gif', '*.webp', '*.svg']:
+                image_files.extend(glob.glob(os.path.join(attachments_folder, ext)))
+            
+            # Use BeautifulSoup to process images with dimension extraction
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            for image_path in image_files:
+                filename = os.path.basename(image_path)
+                
+                # Clean filename for Azure DevOps Wiki
+                if '.' in filename:
+                    name_part = filename.rsplit('.', 1)[0]
+                    ext_part = filename.rsplit('.', 1)[1]
+                    safe_filename = self.get_safe_filename_corrected(name_part) + '.' + ext_part
+                else:
+                    safe_filename = self.get_safe_filename_corrected(filename)
+                
+                # Copy to temp_images with page_id prefix
+                local_path = f"temp_images/{page_id}_{safe_filename}"
+                
+                # Copy file if not already copied
+                if not os.path.exists(local_path):
+                    with open(image_path, 'rb') as src:
+                        with open(local_path, 'wb') as dst:
+                            dst.write(src.read())
+                
+                # Store Azure path (no subfolders, directly in .attachments/)
+                azure_path = f"/.attachments/{safe_filename}"
+                self.downloaded_images[local_path] = azure_path
+                
+                # Replace image references in HTML with markdown
+                attachment_path = f".attachments/{safe_filename}"
+                
+                # Find all img tags that reference this filename
+                img_tags = []
+                seen_tags = set()
+                
+                # Find by attachments path
+                for img in soup.find_all('img', src=re.compile(re.escape(f'attachments/{page_id}/{filename}'))):
+                    if id(img) not in seen_tags:
+                        img_tags.append(img)
+                        seen_tags.add(id(img))
+                
+                # Find by data-image-src
+                for img in soup.find_all('img', {'data-image-src': re.compile(re.escape(f'attachments/{page_id}/{filename}'))}):
+                    if id(img) not in seen_tags:
+                        img_tags.append(img)
+                        seen_tags.add(id(img))
+                
+                # Also check for filename in URL parameters
+                for img in soup.find_all('img'):
+                    src = img.get('src', '')
+                    if filename in src and f'attachments/{page_id}' in src:
+                        if id(img) not in seen_tags:
+                            img_tags.append(img)
+                            seen_tags.add(id(img))
+                
+                # Process each img tag
+                for img in img_tags:
+                    # Extract width and height attributes
+                    width = img.get('width')
+                    height = img.get('height')
+                    
+                    # Also check for width in src URL (e.g., ?width=100)
+                    src = img.get('src', '')
+                    width_match = re.search(r'[?&]width=(\d+)', src)
+                    if width_match and not width:
+                        width = width_match.group(1)
+                    
+                    # Build markdown with dimensions
+                    dimensions = ""
+                    if width and height:
+                        dimensions = f" ={width}x{height}"
+                    elif width:
+                        dimensions = f" ={width}x{width}"
+                    
+                    # Get alt text if available, otherwise use safe_filename
+                    alt_text = img.get('alt') or img.get('title') or safe_filename
+                    
+                    markdown_img = f'![{alt_text}]({attachment_path}{dimensions})'
+                    
+                    # Replace the img tag (or its parent span if it's a wrapper)
+                    parent = img.parent
+                    if parent and parent.name == 'span' and 'confluence-embedded-file-wrapper' in parent.get('class', []):
+                        parent.replace_with(markdown_img)
+                    else:
+                        img.replace_with(markdown_img)
+                    
+                    print(f"    📎 Processed local image: {filename} → {attachment_path}{dimensions}")
+            
+            return str(soup)
+            
+        except Exception as e:
+            print(f"  ⚠️ Error processing local images: {str(e)}")
+            return html_content
+
+    def process_base64_images(self, html_content: str, page_id: str) -> str:
+        """Detect, decode, and save base64-encoded images from HTML"""
+        try:
+            # Pattern to match base64-encoded images
+            # Matches: data:image/[format];base64,[base64-data]
+            base64_pattern = r'data:image/([a-zA-Z]+);base64,([A-Za-z0-9+/=]+)'
+            
+            matches = re.finditer(base64_pattern, html_content)
+            
+            image_counter = 0
+            for match in matches:
+                image_format = match.group(1)  # png, jpeg, jpg, gif, etc.
+                base64_data = match.group(2)
+                
+                # Decode base64 data
+                try:
+                    image_data = base64.b64decode(base64_data)
+                except Exception as decode_error:
+                    print(f"  ⚠️ Failed to decode base64 image: {str(decode_error)}")
+                    continue
+                
+                # Generate filename with timestamp postfix
+                image_counter += 1
+                # Normalize format (jpeg -> jpg)
+                if image_format.lower() == 'jpeg':
+                    image_format = 'jpg'
+                
+                # Generate timestamp with microseconds to ensure uniqueness
+                # Format: YYYYMMDDHHMMSSffffff (e.g., 20250119143025123456)
+                timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')
+                
+                safe_filename = self.get_safe_filename_corrected(f"base64-image-{timestamp}") + f".{image_format.lower()}"
+                
+                # Save to temp_images
+                local_path = f"temp_images/{page_id}_{safe_filename}"
+                
+                try:
+                    with open(local_path, 'wb') as f:
+                        f.write(image_data)
+                    
+                    # Store Azure path
+                    azure_path = f"/.attachments/{safe_filename}"
+                    self.downloaded_images[local_path] = azure_path
+                    
+                    # Replace base64 data with link
+                    attachment_path = f".attachments/{safe_filename}"
+                    html_content = html_content.replace(match.group(0), attachment_path)
+                    
+                    print(f"    📎 Decoded base64 image: {safe_filename} ({len(image_data)} bytes)")
+                    
+                except Exception as save_error:
+                    print(f"  ⚠️ Failed to save base64 image: {str(save_error)}")
+                    continue
+            
+            if image_counter > 0:
+                print(f"  ✅ Processed {image_counter} base64-encoded images")
+            
+        except Exception as e:
+            print(f"  ⚠️ Error processing base64 images: {str(e)}")
+        
+        return html_content
+
+    def migrate_from_local_export(self, export_folder: str):
+        """Migrate from a local Confluence HTML export folder"""
+        print(f"🚀 Starting migration from local export: {export_folder}")
+        
+        # Validate export folder
+        if not os.path.exists(export_folder):
+            print(f"❌ Export folder not found: {export_folder}")
+            return False
+        
+        # Get all pages from local export
+        print("📡 Reading pages from local export...")
+        try:
+            pages = self.get_local_pages(export_folder)
+            print(f"✅ Successfully parsed {len(pages)} pages from local export")
+        except Exception as e:
+            print(f"❌ Failed to parse local export: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return False
+        
+        # Build corrected structure
+        wiki_structure = self.build_corrected_wiki_structure_from_local(pages, export_folder)
+        
+        # Commit to Azure DevOps using chunked approach
+        success = self.commit_chunked_wiki_structure_fixed(wiki_structure)
+        
+        if success:
+            print("✅ Local export migration completed successfully!")
+            print("✅ All spaces replaced with hyphens")
+            print("✅ .order files created for proper page sequencing")
+            print("✅ Azure DevOps Wiki naming conventions followed")
+        else:
+            print("❌ Migration failed")
+        
+        return success
+
+    def build_corrected_wiki_structure_from_local(self, pages: List[Dict], export_folder: str) -> Dict:
+        """Build wiki structure from local export pages"""
+        print("🔧 Building Azure DevOps Wiki structure from local export...")
+        
+        # Sort pages by hierarchy level
+        pages_by_level = {}
+        for page in pages:
+            ancestors = page.get('ancestors', [])
+            level = len(ancestors)
+            
+            if level not in pages_by_level:
+                pages_by_level[level] = []
+            pages_by_level[level].append(page)
+        
+        print(f"📊 Sorted {len(pages)} pages by {len(pages_by_level)} hierarchy levels")
+        
+        # Build the complete structure
+        wiki_files = {}
+        folder_structure = {}
+        
+        # Process pages level by level
+        for level in sorted(pages_by_level.keys()):
+            print(f"  📁 Processing Level {level} ({len(pages_by_level[level])} pages)...")
+            
+            for page in pages_by_level[level]:
+                page_title = page['title']
+                ancestors = page.get('ancestors', [])
+                
+                # Generate corrected wiki path
+                wiki_path = self.get_hierarchical_wiki_path_corrected(page_title, ancestors)
+                
+                # Process local images first
+                html_content = page['body']['storage']['value']
+                html_content = self.process_local_images(html_content, page['id'], export_folder)
+                
+                # Convert content to markdown
+                markdown_content = self.convert_html_to_markdown(html_content, page['id'])
+                
+                # Store in structure
+                wiki_files[wiki_path] = {
+                    'content': markdown_content,
+                    'page_id': page['id'],
+                    'title': page_title,
+                    'level': level,
+                    'ancestors': ancestors
+                }
+                
+                # Track folders needed
+                path_parts = wiki_path.split('/')[:-1]  # Exclude the .md file
+                current_path = ""
+                
+                for part in path_parts:
+                    if current_path:
+                        current_path += f"/{part}"
+                    else:
+                        current_path = part
+                    
+                    if current_path not in folder_structure:
+                        folder_structure[current_path] = []
+                
+                print(f"    ✅ {page_title} → {wiki_path}")
+        
+        # Create .order files for folders with subpages
+        for folder_path in folder_structure:
+            # Find pages in this folder
+            folder_pages = []
+            for wiki_path in wiki_files:
+                page_folder = '/'.join(wiki_path.split('/')[:-1])
+                if page_folder == folder_path:
+                    folder_pages.append(wiki_files[wiki_path])
+            
+            if folder_pages:
+                # Sort pages by title
+                folder_pages.sort(key=lambda x: x['title'])
+                
+                # Create .order file content
+                order_content = '\n'.join([self.get_safe_filename_corrected(p['title']) for p in folder_pages])
+                wiki_files[f"{folder_path}/.order"] = {
+                    'content': order_content,
+                    'is_order_file': True
+                }
+        
+        print(f"📂 Created structure with {len(wiki_files)} files and {len(folder_structure)} folders")
+        return wiki_files
 
     def migrate_space_corrected(self, space_key: str):
         """Run the corrected migration"""
@@ -935,26 +1632,50 @@ if __name__ == "__main__":
     
     space_key = os.getenv('CONFLUENCE_SPACE_KEY', "YOUR_SPACE_KEY")
     
+    # Check for offline mode
+    offline_mode = os.getenv('OFFLINE_MODE', 'false').lower() == 'true'
+    export_folder = os.getenv('EXPORT_FOLDER', 'TEST')
+    
     # Check if we have environment variables loaded
     env_vars_loaded = all([
-        confluence_config["base_url"] != "https://yourcompany.atlassian.net",
-        confluence_config["username"] != "your.email@company.com",
-        confluence_config["api_token"] != "YOUR_TOKEN_HERE",
         azuredevops_config["organization"] != "YourOrganization",
         azuredevops_config["project"] != "YourProject",
         azuredevops_config["wiki_identifier"] != "YourProject.wiki",
-        azuredevops_config["personal_access_token"] != "YOUR_TOKEN_HERE",
-        space_key != "YOUR_SPACE_KEY"
+        azuredevops_config["personal_access_token"] != "YOUR_TOKEN_HERE"
     ])
     
-    if env_vars_loaded:
-        print("✅ Using configuration from environment variables")
+    if offline_mode:
+        print("✅ Running in OFFLINE mode - reading from local export folder")
+        print(f"📁 Export folder: {export_folder}")
+        
+        if not env_vars_loaded:
+            print("⚠️ Azure DevOps configuration missing. Please set environment variables.")
+            print("Required environment variables:")
+            print("  DEVOPS_ORGANIZATION, DEVOPS_PROJECT, DEVOPS_WIKI_IDENTIFIER, DEVOPS_PAT")
+            print("  OFFLINE_MODE=true, EXPORT_FOLDER=<path_to_export>")
+        
+        migrator = ConfluenceToAzureDevOpsHierarchicalMigrator(confluence_config, azuredevops_config)
+        success = migrator.migrate_from_local_export(export_folder)
+        print(f"Migration success: {success}")
     else:
-        print("⚠️ Using default configuration. Please set environment variables or update the script.")
-        print("Required environment variables:")
-        print("  CONFLUENCE_BASE_URL, CONFLUENCE_USERNAME, CONFLUENCE_API_TOKEN, CONFLUENCE_SPACE_KEY")
-        print("  DEVOPS_ORGANIZATION, DEVOPS_PROJECT, DEVOPS_WIKI_IDENTIFIER, DEVOPS_PAT")
-    
-    migrator = ConfluenceToAzureDevOpsHierarchicalMigrator(confluence_config, azuredevops_config)
-    success = migrator.migrate_space_corrected(space_key)
-    print(f"Migration success: {success}")
+        # Online mode - fetch from Confluence API
+        online_vars_loaded = env_vars_loaded and all([
+            confluence_config["base_url"] != "https://yourcompany.atlassian.net",
+            confluence_config["username"] != "your.email@company.com",
+            confluence_config["api_token"] != "YOUR_TOKEN_HERE",
+            space_key != "YOUR_SPACE_KEY"
+        ])
+        
+        if online_vars_loaded:
+            print("✅ Using configuration from environment variables")
+        else:
+            print("⚠️ Using default configuration. Please set environment variables or update the script.")
+            print("Required environment variables:")
+            print("  CONFLUENCE_BASE_URL, CONFLUENCE_USERNAME, CONFLUENCE_API_TOKEN, CONFLUENCE_SPACE_KEY")
+            print("  DEVOPS_ORGANIZATION, DEVOPS_PROJECT, DEVOPS_WIKI_IDENTIFIER, DEVOPS_PAT")
+            print("Optional for offline mode:")
+            print("  OFFLINE_MODE=true, EXPORT_FOLDER=<path_to_export>")
+        
+        migrator = ConfluenceToAzureDevOpsHierarchicalMigrator(confluence_config, azuredevops_config)
+        success = migrator.migrate_space_corrected(space_key)
+        print(f"Migration success: {success}")

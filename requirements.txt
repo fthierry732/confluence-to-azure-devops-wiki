@@ -3,6 +3,7 @@ html2text>=2020.1.16
 pathlib2>=2.3.7
 flask>=3.1.2
 python-dotenv>=1.0.0
+beautifulsoup4>=4.9.0
 
 # Optional proxy support dependencies
 # Uncomment the following lines if you need proxy support:
